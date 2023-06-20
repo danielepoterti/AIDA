@@ -21,11 +21,14 @@ import pickle
 import AIDAkeys
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.vectorstores import Chroma
-from langchain.prompts import MessagesPlaceholder, ChatPromptTemplate, HumanMessagePromptTemplate, SystemMessagePromptTemplate
+from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate, SystemMessagePromptTemplate
 from langchain import PromptTemplate
-from langchain.memory import ConversationBufferMemory
+from langchain.memory import  ConversationBufferWindowMemory
 from langchain.chains import ConversationalRetrievalChain
 from langchain.chat_models import ChatOpenAI
+from langchain.llms import OpenAI
+from langchain.agents import initialize_agent, Tool
+from langchain.agents import AgentType
 
 from telegram import __version__ as TG_VER
 
@@ -61,30 +64,17 @@ persist_directory = 'ChromaDB_Bicocca_ALTERNATIVE_DEF'
 vectordb = Chroma(persist_directory=persist_directory, embedding_function=embeddings)
 
 
-
-template = """You're a friendly AI of Università degli Studi di Milano-Bicocca made to give an answer to students' (both High School Students and University Students) question. You must not talk about other universities.
-Your answers must be based on the documents provided; all documents provided are related to the Università degli Sudi di Milano-Bicocca.
-If a question is asked within the application about a degree program or course of study your question must follow the contents of their documents.\n
-If you want more informations to understand better which documents you need to use, you can ask for clarifications to the user. Note that in SUA documents you can find general informations about a degree course,
-in Syllabus documents you can find informations about a single exam. Note that in italian the word "corso" is used also as a synonym of the word "insegnamento", so you need to disambiguate the term
-in order to understand if the user wants informations about a degree course or an exam. \n
-You must not answer questions not related to the university environment. \n
-Use the following pieces of context to answer the users question. If you don't know the answer, just say that you don't know, don't try to make up an answer.
-\n----------------\n{context}"""
-
-
-# aggiungere che deve rispondere solo a domande in ambito universitario
-
 prompt=ChatPromptTemplate(
     input_variables=['context', 'question'], 
-    output_parser=None, partial_variables={}, 
+    output_parser=None,
+    partial_variables={}, 
     messages=[
         SystemMessagePromptTemplate(
             prompt = PromptTemplate(
                 input_variables=['context'], 
                 output_parser=None, 
                 partial_variables={}, 
-                template=template, 
+                template=AIDAkeys.template, 
                 template_format='f-string', 
                 validate_template=True), 
                 additional_kwargs={}), 
@@ -98,7 +88,8 @@ prompt=ChatPromptTemplate(
                         validate_template=True), 
                         additional_kwargs={})])
 
-
+def processThought(thought):
+  return thought
 
 
 
@@ -115,10 +106,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message when the command /start is issued."""
     user = update.effective_user
 
-    ref = db.reference('/chats/'+str(user.id))
-    snapshot = ref.get()
+    ref_mem = db.reference('/chats/'+str(user.id)+'/memory/')
+    snapshot_mem = ref_mem.get()
 
-    if snapshot is not None:
+    
+
+    if snapshot_mem is not None :
         await update.message.reply_html(
             f"""Ciao {user.first_name}!
 Come posso aiutarti?
@@ -127,9 +120,11 @@ Come posso aiutarti?
 
     else:
 
-        chat_history = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+        chat_mem = ConversationBufferWindowMemory(memory_key="chat_history", return_messages=True, k = 5)
+        
    
-        ref.set(pickle.dumps(chat_history).hex())
+        ref_mem.set(pickle.dumps(chat_mem).hex())
+        
 
         await update.message.reply_html(
             rf"""Ciao {user.mention_html()}!
@@ -141,13 +136,14 @@ Sono un intelligenza artificiale ...""",
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message when the command /help is issued."""
     user = update.effective_user
-    ref = db.reference('/chats/'+str(user.id))
-
-    chat_history = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+    ref_mem = db.reference('/chats/'+str(user.id)+'/memory/')
     
 
-
-    ref.set(pickle.dumps(chat_history).hex())
+    chat_mem = ConversationBufferWindowMemory(memory_key="chat_history", return_messages=True, k = 5)
+    
+    
+    ref_mem.set(pickle.dumps(chat_mem).hex())
+    
 
     chat_id = update.effective_chat.id
     message_id = update.message.message_id
@@ -161,31 +157,70 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Echo the user message."""
     user = update.effective_user
-    ref = db.reference('/chats/'+str(user.id))
+    ref_mem = db.reference('/chats/'+str(user.id)+'/memory/')
+    
 
-    snapshot = ref.get()
+    snapshot_mem = ref_mem.get()
+    
 
-    memory = pickle.loads(bytes.fromhex(snapshot))
-
-  
+    memory = pickle.loads(bytes.fromhex(snapshot_mem))
+    
 
     qa = ConversationalRetrievalChain.from_llm(ChatOpenAI(temperature=0, model_name='gpt-3.5-turbo'),
                                            verbose = True,
-                                           retriever=vectordb.as_retriever(search_type="similarity", search_kwargs={"k":10}),
+                                           retriever=vectordb.as_retriever(search_type="similarity", search_kwargs={"k":8}),
                                            memory=memory,
                                            chain_type = "stuff",
-                                           combine_docs_chain_kwargs={'prompt': prompt})
+                                           condense_question_llm = OpenAI(temperature=0, model_name='gpt-3.5-turbo'),
+                                           #condense_question_prompt = CONDENSE_QUESTION_PROMPT,
+                                           combine_docs_chain_kwargs={'prompt': prompt}
+                                           )
+    
+    llm = OpenAI(temperature=0, model_name='gpt-3.5-turbo')
+
+    tools = [
+    Tool(
+        name = "Bicocca QA System",
+        func=qa.run,
+        description="""useful for when you need to answer questions about courses at the University of Milano-Bicocca. It allows you to find information into document of degree courses or exams belonging to a degree course.
+        This tool is useful when the user asks for informations about University of Milano-Bicocca aspects. Input should be a question."""
+    ),
+    Tool(
+    name = "Thought Processing",
+    description = """This is useful for when you have a thought that you want to use in a task,
+    but you want to make sure it's formatted correctly.
+    Input is your thought and self-critique and output is the processed thought.""",
+    func =  processThought,
+  )
+
+    ]
+
+    agent = initialize_agent(tools,
+                         llm,
+                         agent=AgentType.CONVERSATIONAL_REACT_DESCRIPTION,
+                         verbose=True,
+                         memory =  memory,
+                         agent_kwargs = {                         
+                                "input_variables": ["input", "agent_scratchpad", "chat_history"],
+                          },
+                         handle_parsing_errors=True,
+                         )
+
+    
     print(update.message.text)
     # context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-    result = qa({"question": str(update.message.text) })
+    
 
+    agent.agent.llm_chain.prompt.template = AIDAkeys.templateAgent
 
+    response = agent.run(input=str(update.message.text))
 
-    ref.set(pickle.dumps(qa.memory).hex())
+    ref_mem.set(pickle.dumps(agent.memory).hex())
 
-    await update.message.reply_text(result["answer"])
+    await update.message.reply_text(response)
 
     del qa
+    del agent
 
 
 def main() -> None:
