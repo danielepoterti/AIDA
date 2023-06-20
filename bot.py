@@ -16,6 +16,7 @@ bot.
 """
 
 import logging
+import random
 import os
 import pickle
 import AIDAkeys
@@ -31,6 +32,7 @@ from langchain.agents import initialize_agent, Tool
 from langchain.agents import AgentType
 
 from telegram import __version__ as TG_VER
+from telegram.constants import ChatAction
 
 try:
     from telegram import __version_info__
@@ -157,6 +159,12 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Echo the user message."""
     user = update.effective_user
+    chat_id = update.effective_chat.id
+    
+    waitingEmoji = ["🤔", "💭", "🔎", "💬"]
+
+    await update.message.reply_text(random.choice(waitingEmoji))
+
     ref_mem = db.reference('/chats/'+str(user.id)+'/memory/')
     
 
@@ -208,7 +216,7 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     
     print(update.message.text)
-    # context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    
     
 
     agent.agent.llm_chain.prompt.template = AIDAkeys.templateAgent
@@ -216,6 +224,10 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     response = agent.run(input=str(update.message.text))
 
     ref_mem.set(pickle.dumps(agent.memory).hex())
+
+    message_id = update.effective_message.message_id
+    
+    await context.bot.delete_message(chat_id=chat_id, message_id=message_id+1)
 
     await update.message.reply_text(response)
 
