@@ -20,6 +20,7 @@ import random
 import os
 import pickle
 import AIDAkeys
+import langchain
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.vectorstores import Chroma
 from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate, SystemMessagePromptTemplate
@@ -27,12 +28,11 @@ from langchain import PromptTemplate
 from langchain.memory import  ConversationBufferWindowMemory
 from langchain.chains import ConversationalRetrievalChain
 from langchain.chat_models import ChatOpenAI
-from langchain.llms import OpenAI
 from langchain.agents import initialize_agent, Tool
 from langchain.agents import AgentType
 
 from telegram import __version__ as TG_VER
-from telegram.constants import ChatAction
+
 
 try:
     from telegram import __version_info__
@@ -45,8 +45,7 @@ if __version_info__ < (20, 0, 0, "alpha", 1):
         f"{TG_VER} version of this example, "
         f"visit https://docs.python-telegram-bot.org/en/v{TG_VER}/examples.html"
     )
-from telegram import ForceReply, Update
-# from telegram import (ChatAction)
+from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 import firebase_admin
 from firebase_admin import credentials
@@ -62,7 +61,7 @@ firebase_admin.initialize_app(cred,{
 
 os.environ['OPENAI_API_KEY'] = AIDAkeys.openAIkeyAndrea
 embeddings = OpenAIEmbeddings()
-persist_directory = 'ChromaDB_Bicocca_ALTERNATIVE_DEF_FINAL'
+persist_directory = 'ChromaDB_Bicocca_AIDA_FINAL'
 vectordb = Chroma(persist_directory=persist_directory, embedding_function=embeddings)
 
 
@@ -92,7 +91,8 @@ prompt=ChatPromptTemplate(
 
 def processThought(thought):
   return thought
-
+ 
+#langchain.debug = True
 
 
 # Enable logging
@@ -188,17 +188,18 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     memory = pickle.loads(bytes.fromhex(snapshot_mem))
     
 
-    qa = ConversationalRetrievalChain.from_llm(ChatOpenAI(temperature=0, model_name='gpt-3.5-turbo'),
+    qa = ConversationalRetrievalChain.from_llm(ChatOpenAI(temperature=0, model_name=AIDAkeys.modelName),
                                            verbose = True,
-                                           retriever=vectordb.as_retriever(search_type="mmr", search_kwargs={"k":8}),
+                                           retriever=vectordb.as_retriever(search_type="similarity", search_kwargs={"k":4}),
                                            memory=memory,
                                            chain_type = "stuff",
-                                           condense_question_llm = ChatOpenAI(temperature=0, model_name='gpt-3.5-turbo'),
+                                           condense_question_llm = ChatOpenAI(temperature=0, model_name=AIDAkeys.modelName),
                                            #condense_question_prompt = CONDENSE_QUESTION_PROMPT,
                                            combine_docs_chain_kwargs={'prompt': prompt}
+                                        
                                            )
     
-    llm = ChatOpenAI(temperature=0, model_name='gpt-3.5-turbo')
+    llm = ChatOpenAI(temperature=0, model_name=AIDAkeys.modelName)
 
     tools = [
     Tool(
